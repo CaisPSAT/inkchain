@@ -116,6 +116,21 @@ button:disabled {
   backdrop-filter: blur(14px);
 }
 
+.connection-banner {
+  position: fixed;
+  left: 50%;
+  top: max(14px, env(safe-area-inset-top));
+  z-index: 30;
+  transform: translateX(-50%);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow);
+  font-weight: 900;
+}
+
 .shell {
   width: min(1100px, 100%);
   min-height: 100vh;

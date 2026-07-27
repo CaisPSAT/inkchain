@@ -123,11 +123,23 @@ export function joinRoom(code: string, socketId: string, requestedName: string):
     const replacedSocketId = reconnecting.id;
     reconnecting.id = socketId;
     reconnecting.connected = true;
+    reconnecting.disconnectedAt = undefined;
     room.emptySince = undefined;
     return { room, player: reconnecting, replacedSocketId };
   }
 
-  if (room.phase !== "lobby") throw new Error("A round is active. Only disconnected players may rejoin.");
+  if (room.phase !== "lobby") {
+    const activeSeat = room.round?.participantNames.find((name) => name.toLowerCase() === normalized.toLowerCase());
+    if (!activeSeat) throw new Error("A round is active. Only disconnected players may rejoin.");
+    const player = room.players.find((p) => p.name === activeSeat);
+    if (!player) throw new Error("Your seat was not found.");
+    const replacedSocketId = player.connected ? player.id : undefined;
+    player.id = socketId;
+    player.connected = true;
+    player.disconnectedAt = undefined;
+    room.emptySince = undefined;
+    return { room, player, replacedSocketId };
+  }
   if (room.players.filter((p) => p.connected).length >= 16) throw new Error("This room is full.");
 
   const player = createPlayer(socketId, makeUniqueName(room, normalized), false, room.players.length === 1);
@@ -141,6 +153,7 @@ export function disconnectPlayer(socketId: string): Room | undefined {
     const player = room.players.find((p) => p.id === socketId);
     if (!player) continue;
     player.connected = false;
+    player.disconnectedAt = Date.now();
     if (room.players.every((p) => !p.connected)) room.emptySince = Date.now();
     return room;
   }

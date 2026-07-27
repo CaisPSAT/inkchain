@@ -10,11 +10,12 @@ type Ack<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 export default function App() {
   const params = new URLSearchParams(window.location.search);
   const [name, setName] = useState(localStorage.getItem("inkchain:name") ?? "");
-  const [code, setCode] = useState(params.get("room")?.toUpperCase() ?? "");
+  const [code, setCode] = useState(params.get("room")?.toUpperCase() ?? localStorage.getItem("inkchain:room-code") ?? "");
   const [room, setRoom] = useState<Room | null>(null);
   const [playerName, setPlayerName] = useState(localStorage.getItem("inkchain:active-name") ?? "");
   const [theme, setTheme] = useState(localStorage.getItem("inkchain:theme") ?? "light");
   const [error, setError] = useState("");
+  const [reconnecting, setReconnecting] = useState(false);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -24,9 +25,25 @@ export default function App() {
 
   useEffect(() => {
     const onUpdate = (updated: Room) => setRoom(updated);
+    const onDisconnect = () => setReconnecting(true);
+    const onConnect = () => setReconnecting(false);
     socket.on("room:updated", onUpdate);
+    socket.on("disconnect", onDisconnect);
+    socket.on("connect", onConnect);
     const timer = window.setInterval(() => setNow(Date.now()), 100);
-    return () => { socket.off("room:updated", onUpdate); window.clearInterval(timer); };
+    return () => { socket.off("room:updated", onUpdate); socket.off("disconnect", onDisconnect); socket.off("connect", onConnect); window.clearInterval(timer); };
+  }, []);
+
+  useEffect(() => {
+    const savedRoomCode = params.get("room")?.toUpperCase() ?? localStorage.getItem("inkchain:room-code") ?? "";
+    const savedName = localStorage.getItem("inkchain:active-name") ?? localStorage.getItem("inkchain:name") ?? "";
+    if (!savedRoomCode || !savedName || room) return;
+    socket.emit("room:join", { code: savedRoomCode, name: savedName }, (response: Ack<{ room: Room; playerName: string }>) => {
+      if (!response.ok) return;
+      saveIdentity(response.playerName, response.room.code);
+      setCode(response.room.code);
+      setRoom(response.room);
+    });
   }, []);
 
   const currentPlayer = room?.players.find((p) => p.name === playerName);
@@ -34,9 +51,10 @@ export default function App() {
   const hasControl = Boolean(currentPlayer?.isHost || (!hostConnected && currentPlayer?.isCoHost));
   const activeCount = room ? room.players.filter((p) => p.connected && (room.settings.hostPlaying || !p.isHost)).length : 0;
 
-  const saveIdentity = (returnedName: string) => {
+  const saveIdentity = (returnedName: string, roomCode?: string) => {
     localStorage.setItem("inkchain:name", returnedName);
     localStorage.setItem("inkchain:active-name", returnedName);
+    if (roomCode) localStorage.setItem("inkchain:room-code", roomCode);
     setPlayerName(returnedName);
   };
 
@@ -51,8 +69,8 @@ export default function App() {
   let screen;
 
   if (!room) screen = <Landing name={name} setName={setName} code={code} setCode={setCode} error={error}
-    create={() => emit<{ room: Room; playerName: string }>("room:create", { name }, (r) => { if (r.ok) { saveIdentity(r.playerName); setRoom(r.room); } })}
-    join={() => emit<{ room: Room; playerName: string }>("room:join", { code, name }, (r) => { if (r.ok) { saveIdentity(r.playerName); setRoom(r.room); } })} />;
+    create={() => emit<{ room: Room; playerName: string }>("room:create", { name }, (r) => { if (r.ok) { saveIdentity(r.playerName, r.room.code); setCode(r.room.code); setRoom(r.room); } })}
+    join={() => emit<{ room: Room; playerName: string }>("room:join", { code, name }, (r) => { if (r.ok) { saveIdentity(r.playerName, r.room.code); setCode(r.room.code); setRoom(r.room); } })} />;
 
   else if (room.phase === "lobby") screen = <Lobby room={room} hasControl={hasControl} activeCount={activeCount} playerName={playerName} error={error}
     update={(patch) => emit("room:update-settings", { settings: patch })}
@@ -79,6 +97,7 @@ export default function App() {
     <button className="theme-toggle" type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
       {theme === "dark" ? "Light" : "Dark"}
     </button>
+    {reconnecting && <div className="connection-banner">Reconnecting...</div>}
     {screen}
   </>;
 }

@@ -21,6 +21,7 @@ export interface Player {
   isHost: boolean;
   isCoHost: boolean;
   joinedAt: number;
+  disconnectedAt?: number;
 }
 
 export interface BookletPage {

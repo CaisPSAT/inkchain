@@ -51,6 +51,7 @@ const io = new Server(server, {
 });
 
 const identityBySocket = new Map<string, { roomCode: string; playerName: string }>();
+const replacedSockets = new Set<string>();
 const nameSchema = z.string().trim().min(1).max(24);
 const codeSchema = z.string().trim().length(5);
 
@@ -113,7 +114,10 @@ io.on("connection", (socket) => {
     try {
       const code = codeSchema.parse(payload?.code).toUpperCase();
       const result = joinRoom(code, socket.id, nameSchema.parse(payload?.name));
-      if (result.replacedSocketId) io.sockets.sockets.get(result.replacedSocketId)?.disconnect(true);
+      if (result.replacedSocketId) {
+        replacedSockets.add(result.replacedSocketId);
+        io.sockets.sockets.get(result.replacedSocketId)?.disconnect(true);
+      }
       socket.join(code);
       identityBySocket.set(socket.id, { roomCode: code, playerName: result.player.name });
       ack({ ok: true, room: toPublicRoom(result.room, result.player.name), playerName: result.player.name });
@@ -259,21 +263,21 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    if (replacedSockets.delete(socket.id)) {
+      identityBySocket.delete(socket.id);
+      return;
+    }
     const identity = identityBySocket.get(socket.id);
     identityBySocket.delete(socket.id);
     const room = disconnectPlayer(socket.id);
     if (!room || !identity) return;
-    if (room.phase === "playing") advanceIfReady(room);
+    if (room.phase === "playing") broadcastRoom(room);
     if (room.phase === "prompt-entry" && room.round) {
-      const booklet = room.round.booklets.find((b) => b.ownerName === identity.playerName);
-      if (booklet && booklet.pages.length === 0) submitCustomPrompt(room, identity.playerName, "");
-      if (customPromptsComplete(room)) { startCountdown(room); scheduleCountdown(room); }
+      broadcastRoom(room);
     }
     if (room.phase === "word-reveal" && room.round) {
-      submitWordReveal(room, identity.playerName);
-      if (wordRevealComplete(room)) { startCountdown(room); scheduleCountdown(room); }
+      broadcastRoom(room);
     }
-    broadcastRoom(room);
   });
 });
 
