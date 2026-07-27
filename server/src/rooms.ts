@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { PROMPTS } from "./prompts.js";
+import { PROMPT_PACKS } from "./prompts.js";
 import type { Booklet, BookletPage, GameSettings, Player, PublicRoom, Room, Stroke, Submission } from "./types.js";
 
 const rooms = new Map<string, Room>();
@@ -13,6 +13,7 @@ const defaultSettings: GameSettings = {
   guessTimerSeconds: 60,
   multicolor: true,
   promptMode: "random",
+  promptPack: "classic",
   hostPlaying: false,
   randomPassing: false
 };
@@ -57,10 +58,11 @@ function participants(room: Room): Player[] {
 }
 
 function randomPrompt(room: Room): string {
-  let available = PROMPTS.filter((prompt) => !room.usedPrompts.includes(prompt));
+  const prompts = PROMPT_PACKS[room.settings.promptPack] ?? PROMPT_PACKS.classic;
+  let available = prompts.filter((prompt) => !room.usedPrompts.includes(prompt));
   if (available.length === 0) {
     room.usedPrompts = [];
-    available = [...PROMPTS];
+    available = [...prompts];
   }
   const prompt = available[crypto.randomInt(available.length)];
   room.usedPrompts.push(prompt);
@@ -116,6 +118,18 @@ export function createRoom(socketId: string, requestedName: string): Room {
 }
 
 export function getRoom(code: string): Room | undefined { return rooms.get(code.toUpperCase()); }
+
+export function listRooms(): Room[] { return [...rooms.values()]; }
+
+export function restoreRoom(room: Room): void {
+  room.timerHandle = undefined;
+  room.emptySince = undefined;
+  for (const player of room.players) {
+    player.connected = false;
+    player.disconnectedAt = Date.now();
+  }
+  rooms.set(room.code, room);
+}
 
 export function joinRoom(code: string, socketId: string, requestedName: string): { room: Room; player: Player; replacedSocketId?: string } {
   const room = getRoom(code);
@@ -175,6 +189,7 @@ export function updateSettings(code: string, settings: Partial<GameSettings>): R
   const room = getRoom(code);
   if (!room) throw new Error("Room not found.");
   if (room.phase !== "lobby") throw new Error("Settings cannot change during a round.");
+  if (settings.promptPack && settings.promptPack !== room.settings.promptPack) room.usedPrompts = [];
   const nextTimerSeconds = Math.min(180, Math.max(30, settings.timerSeconds ?? room.settings.timerSeconds));
   room.settings = {
     ...room.settings,

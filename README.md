@@ -11,6 +11,7 @@ A complete browser-based drawing-and-guessing party game foundation for 4–16 p
 - Host and automatic backup co-host
 - Host may play or spectate
 - Random nouns or player-written prompts
+- Host-selectable word packs for random prompts
 - Separate 30-180 second optional draw and guess timers
 - Auto-submit of in-progress work when time expires
 - Waiting players can shave one second off drawing time once at least half the room has submitted
@@ -23,9 +24,11 @@ A complete browser-based drawing-and-guessing party game foundation for 4–16 p
 - Disconnected-player blank contributions
 - Active-round reconnect using the same room code and name after disconnection
 - Synchronized host-controlled review
+- Downloadable PNG image strips for completed booklets
 - New-round warning when booklets remain unreviewed
 - Same room code across rounds
 - Empty-room expiration after 15 minutes
+- Optional Redis-backed room snapshots for hosted reconnect/restart recovery
 
 ## Requirements
 
@@ -96,4 +99,4 @@ The production server serves the built React client and Socket.IO game server fr
 
 ## Important implementation note
 
-Rooms are stored in the Node server's memory. Restarting the server clears active rooms. This is suitable for local/private testing. Redis can be added later if the app needs multiple server instances or room survival across server process restarts.
+Rooms are stored in the Node server's memory by default. Set `REDIS_URL` to enable persistent room snapshots across server restarts. For multiple server instances, also make sure your host supports sticky WebSocket sessions.

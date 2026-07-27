@@ -15,10 +15,12 @@ import {
   finishTurn,
   getRoom,
   joinRoom,
+  listRooms,
   createRoom,
   nudgeTurnTimer,
   reorderPlayers,
   resetToLobby,
+  restoreRoom,
   saveTurnDraft,
   selectReviewBooklet,
   startCountdown,
@@ -31,6 +33,7 @@ import {
   updateSettings,
   wordRevealComplete
 } from "./rooms.js";
+import { initPersistence, persistRoom } from "./persistence.js";
 import type { Room, Stroke } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -58,6 +61,7 @@ const nameSchema = z.string().trim().min(1).max(24);
 const codeSchema = z.string().trim().length(5);
 
 function broadcastRoom(room: Room): void {
+  persistRoom(room);
   for (const player of room.players) {
     if (!player.connected) continue;
     io.to(player.id).emit("room:updated", toPublicRoom(room, player.name));
@@ -107,6 +111,7 @@ io.on("connection", (socket) => {
       const room = createRoom(socket.id, nameSchema.parse(payload?.name));
       socket.join(room.code);
       identityBySocket.set(socket.id, { roomCode: room.code, playerName: room.players[0].name });
+      persistRoom(room);
       ack({ ok: true, room: toPublicRoom(room, room.players[0].name), playerName: room.players[0].name });
     } catch (error) { ack({ ok: false, error: error instanceof Error ? error.message : "Unable to create room." }); }
   });
@@ -231,6 +236,7 @@ io.on("connection", (socket) => {
       text: typeof payload?.text === "string" ? payload.text : undefined,
       strokes: Array.isArray(payload?.strokes) ? payload.strokes as Stroke[] : undefined
     });
+    persistRoom(room);
   });
 
   socket.on("turn:force-advance", (_payload, ack) => {
@@ -306,6 +312,7 @@ io.on("connection", (socket) => {
     identityBySocket.delete(socket.id);
     const room = disconnectPlayer(socket.id);
     if (!room || !identity) return;
+    persistRoom(room);
     if (room.phase === "playing") broadcastRoom(room);
     if (room.phase === "prompt-entry" && room.round) {
       broadcastRoom(room);
@@ -319,6 +326,13 @@ io.on("connection", (socket) => {
 if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));
   app.get(/.*/, (_req, res) => res.sendFile(path.join(clientDist, "index.html")));
+}
+
+await initPersistence(restoreRoom);
+
+for (const room of listRooms()) {
+  if (room.phase === "countdown") scheduleCountdown(room);
+  if (room.phase === "playing") scheduleTurnTimer(room);
 }
 
 server.listen(PORT, () => console.log(`InkChain server running on http://localhost:${PORT}`));

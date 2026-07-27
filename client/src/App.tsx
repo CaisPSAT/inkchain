@@ -3,7 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { DrawingCanvas } from "./DrawingCanvas";
 import { ReplayDrawing } from "./ReplayDrawing";
 import { socket } from "./socket";
-import type { GameSettings, Room, Stroke } from "./types";
+import type { Booklet, GameSettings, Room, Stroke } from "./types";
 
 type Ack<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -15,6 +15,7 @@ export default function App() {
   const [playerName, setPlayerName] = useState(localStorage.getItem("inkchain:active-name") ?? "");
   const [theme, setTheme] = useState(localStorage.getItem("inkchain:theme") ?? "light");
   const [error, setError] = useState("");
+  const [recoveryMessage, setRecoveryMessage] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
   const [now, setNow] = useState(Date.now());
   const roomRef = useRef<Room | null>(null);
@@ -44,6 +45,7 @@ export default function App() {
         saveIdentity(sync.playerName, sync.room.code);
         setCode(sync.room.code);
         setRoom(sync.room);
+        setRecoveryMessage("");
         setReconnecting(false);
         reconnectingRef.current = false;
         return;
@@ -53,9 +55,12 @@ export default function App() {
           saveIdentity(join.playerName, join.room.code);
           setCode(join.room.code);
           setRoom(join.room);
+          setRecoveryMessage("");
           setReconnecting(false);
         } else {
-          setReconnecting(true);
+          setRoom(null);
+          setReconnecting(false);
+          setRecoveryMessage(`Room ${savedRoomCode} is no longer active. Create or join another room.`);
         }
         reconnectingRef.current = false;
       });
@@ -126,6 +131,16 @@ export default function App() {
     setPlayerName(returnedName);
   };
 
+  const clearSavedRoom = () => {
+    localStorage.removeItem("inkchain:room-code");
+    localStorage.removeItem("inkchain:active-name");
+    setRoom(null);
+    setPlayerName("");
+    setCode("");
+    setRecoveryMessage("");
+    setReconnecting(false);
+  };
+
   const emit = <T extends object = object>(event: string, payload: object, onSuccess?: (response: Ack<T>) => void) => {
     setError("");
     socket.emit(event, payload, (response: Ack<T>) => {
@@ -136,9 +151,11 @@ export default function App() {
 
   let screen;
 
-  if (!room) screen = <Landing name={name} setName={setName} code={code} setCode={setCode} error={error}
-    create={() => emit<{ room: Room; playerName: string }>("room:create", { name }, (r) => { if (r.ok) { saveIdentity(r.playerName, r.room.code); setCode(r.room.code); setRoom(r.room); } })}
-    join={() => emit<{ room: Room; playerName: string }>("room:join", { code, name }, (r) => { if (r.ok) { saveIdentity(r.playerName, r.room.code); setCode(r.room.code); setRoom(r.room); } })} />;
+  if (!room && recoveryMessage) screen = <RecoveryScreen message={recoveryMessage} clear={clearSavedRoom} create={() => emit<{ room: Room; playerName: string }>("room:create", { name: name || playerName || "Host" }, (r) => { if (r.ok) { saveIdentity(r.playerName, r.room.code); setCode(r.room.code); setRoom(r.room); setRecoveryMessage(""); } })}/>;
+
+  else if (!room) screen = <Landing name={name} setName={setName} code={code} setCode={setCode} error={error}
+    create={() => emit<{ room: Room; playerName: string }>("room:create", { name }, (r) => { if (r.ok) { saveIdentity(r.playerName, r.room.code); setCode(r.room.code); setRoom(r.room); setRecoveryMessage(""); } })}
+    join={() => emit<{ room: Room; playerName: string }>("room:join", { code, name }, (r) => { if (r.ok) { saveIdentity(r.playerName, r.room.code); setCode(r.room.code); setRoom(r.room); setRecoveryMessage(""); } })} />;
 
   else if (room.phase === "lobby") screen = <Lobby room={room} hasControl={hasControl} activeCount={activeCount} playerName={playerName} error={error}
     update={(patch) => emit("room:update-settings", { settings: patch })}
@@ -181,6 +198,14 @@ function Landing({ name, setName, code, setCode, create, join, error }: any) {
   </section></main>;
 }
 
+function RecoveryScreen({ message, clear, create }: { message: string; clear: () => void; create: () => void }) {
+  return <main className="shell center"><section className="card hero recovery-card">
+    <div className="logo">IC</div><p className="eyebrow">ROOM RECOVERY</p><h1>Saved room not found</h1><p className="subtle">{message}</p>
+    <button className="primary full" onClick={create}>Create new room</button>
+    <button className="full" onClick={clear}>Clear saved room</button>
+  </section></main>;
+}
+
 function Lobby({ room, hasControl, activeCount, playerName, update, reorder, start, error }: { room: Room; hasControl: boolean; activeCount: number; playerName: string; update: (p: Partial<GameSettings>) => void; reorder: (names: string[]) => void; start: () => void; error: string }) {
   const joinUrl = `${window.location.origin}?room=${room.code}`;
   const [dragging, setDragging] = useState<string | null>(null);
@@ -204,6 +229,7 @@ function Lobby({ room, hasControl, activeCount, playerName, update, reorder, sta
       <Toggle label="Multicolor drawing" checked={room.settings.multicolor} onChange={(v) => update({ multicolor: v })}/>
       <Toggle label="Random passing each turn" checked={room.settings.randomPassing} onChange={(v) => update({ randomPassing: v })}/>
       <label>Prompt source<select value={room.settings.promptMode} onChange={(e) => update({ promptMode: e.target.value as GameSettings["promptMode"] })}><option value="random">Random nouns</option><option value="custom">Players write their own</option></select></label>
+      {room.settings.promptMode === "random" && <label>Word pack<select value={room.settings.promptPack} onChange={(e) => update({ promptPack: e.target.value as GameSettings["promptPack"] })}><option value="classic">Classic mix</option><option value="animals">Animals</option><option value="objects">Objects</option><option value="hard">Hard mode</option><option value="silly">Silly</option></select></label>}
       <button className="primary full" disabled={activeCount < 4} onClick={start}>Start game</button>{activeCount < 4 && <p className="subtle">At least four participating players are required.</p>}{error && <p className="error">{error}</p>}
     </section> : <section className="card waiting"><div className="pulse"/><h2>Waiting for the host</h2><p className="subtle">The game starts automatically.</p></section>}
   </main>;
@@ -303,7 +329,7 @@ function Review({ room, hasControl, select, next, newRound }: { room: Room; hasC
 
   if (!selected) return <main className="shell review-grid"><section className="review-heading"><p className="eyebrow">ROUND {room.roundNumber} COMPLETE</p><h1>Choose a booklet</h1><p>Everyone's screen follows the host.</p></section><section className="booklet-grid">{booklets.map((b) => <button key={b.id} className={`booklet-button ${round.reviewedBookletIds.includes(b.id) ? "reviewed" : ""}`} disabled={!hasControl} onClick={() => select(b.id)}><span className="avatar">{b.ownerName[0]}</span><strong>{b.ownerName}</strong><small>{round.reviewedBookletIds.includes(b.id) ? "Reviewed" : "Open journey"}</small></button>)}</section>{hasControl && <button className="new-round" onClick={beginNewRound}>New round</button>}</main>;
 
-  return <main className="shell center review-stage"><section className="card reveal-card" key={`${selected.id}-${round.reviewPageIndex}`}><p className="eyebrow">{selected.ownerName.toUpperCase()}'S BOOKLET - {round.reviewPageIndex + 1}/{selected.pages.length}</p><h2>{page?.type === "prompt" ? "Original prompt" : page?.type === "drawing" ? `Drawn by ${page.authorName}` : `Guessed by ${page?.authorName}`}</h2>{page?.blank ? <div className="blank-page">No response</div> : page?.type === "drawing" ? <ReplayDrawing strokes={page.strokes ?? []}/> : <div className="reveal-text">{page?.text || "No response"}</div>}{hasControl && <button className="primary full" onClick={next}>{round.reviewPageIndex === selected.pages.length - 1 ? "Finish booklet" : "Next"}</button>}</section></main>;
+  return <main className="shell center review-stage"><section className="card reveal-card" key={`${selected.id}-${round.reviewPageIndex}`}><p className="eyebrow">{selected.ownerName.toUpperCase()}'S BOOKLET - {round.reviewPageIndex + 1}/{selected.pages.length}</p><h2>{page?.type === "prompt" ? "Original prompt" : page?.type === "drawing" ? `Drawn by ${page.authorName}` : `Guessed by ${page?.authorName}`}</h2>{page?.blank ? <div className="blank-page">No response</div> : page?.type === "drawing" ? <ReplayDrawing strokes={page.strokes ?? []}/> : <div className="reveal-text">{page?.text || "No response"}</div>}<button className="full" onClick={() => downloadBookletImage(selected, room.roundNumber)}>Save booklet image</button>{hasControl && <button className="primary full" onClick={next}>{round.reviewPageIndex === selected.pages.length - 1 ? "Finish booklet" : "Next"}</button>}</section></main>;
 }
 
 function StatusCard({ title, detail, room, timer, hasControl = false, forceAdvance }: { title: string; detail: string; room: Room; timer?: number | null; hasControl?: boolean; forceAdvance?: () => void }) { return <main className="shell center"><section className="card waiting task-card"><div className="pulse"/><p className="eyebrow">ROOM {room.code}</p><h1>{title}</h1><p className="subtle">{detail}</p>{timer !== undefined && timer !== null && <Timer seconds={timer}/>} {hasControl && forceAdvance && <button className="full" onClick={forceAdvance}>Advance turn</button>}</section></main>; }
@@ -313,3 +339,115 @@ function Timer({ seconds, total = 90 }: { seconds: number; total?: number }) {
 }
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) { return <label className="toggle-row"><span>{label}</span><input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)}/></label>; }
 function formatNames(names: string[]) { return names.length <= 1 ? (names[0] ?? "no one") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`; }
+
+function downloadBookletImage(booklet: Booklet, roundNumber: number) {
+  const pageSize = 360;
+  const gap = 28;
+  const margin = 44;
+  const header = 92;
+  const rowHeight = pageSize + 92;
+  const width = 900;
+  const height = header + margin + booklet.pages.length * rowHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  ctx.fillStyle = "#f7f4ee";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#172554";
+  ctx.font = "700 42px Inter, Arial, sans-serif";
+  ctx.fillText(`${booklet.ownerName}'s InkChain`, margin, 58);
+  ctx.font = "18px Inter, Arial, sans-serif";
+  ctx.fillText(`Round ${roundNumber}`, margin, 84);
+
+  booklet.pages.forEach((page, index) => {
+    const top = header + margin + index * rowHeight;
+    ctx.fillStyle = "#ffffff";
+    roundedRect(ctx, margin, top, width - margin * 2, pageSize + 52, 8);
+    ctx.fill();
+    ctx.strokeStyle = "#cad7f5";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#1e3a8a";
+    ctx.font = "700 20px Inter, Arial, sans-serif";
+    ctx.fillText(`${index + 1}. ${page.type === "prompt" ? "Original prompt" : page.type === "drawing" ? "Drawing" : "Guess"} by ${page.authorName}`, margin + 20, top + 34);
+
+    const left = margin + 20;
+    const contentTop = top + 52;
+    if (page.blank) {
+      ctx.fillStyle = "#64748b";
+      ctx.font = "28px Inter, Arial, sans-serif";
+      ctx.fillText("No response", left + 90, contentTop + 180);
+    } else if (page.type === "drawing") {
+      drawStrokes(ctx, page.strokes ?? [], left, contentTop, pageSize);
+    } else {
+      ctx.fillStyle = "#111827";
+      ctx.font = "700 34px Inter, Arial, sans-serif";
+      wrapText(ctx, page.text || "No response", left + 22, contentTop + 78, pageSize - 44, 42);
+    }
+  });
+
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `inkchain-${booklet.ownerName.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-round-${roundNumber}.png`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, "image/png");
+}
+
+function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[], left: number, top: number, size: number) {
+  ctx.save();
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(left, top, size, size);
+  ctx.strokeStyle = "#cad7f5";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(left, top, size, size);
+  ctx.rect(left, top, size, size);
+  ctx.clip();
+  for (const stroke of strokes) {
+    if (stroke.points.length < 2) continue;
+    ctx.beginPath();
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = stroke.width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.moveTo(left + stroke.points[0].x * size, top + stroke.points[0].y * size);
+    for (const point of stroke.points.slice(1)) ctx.lineTo(left + point.x * size, top + point.y * size);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function wrapText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) {
+  const words = text.split(/\s+/);
+  let line = "";
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      ctx.fillText(line, x, y);
+      line = word;
+      y += lineHeight;
+    } else {
+      line = test;
+    }
+  }
+  if (line) ctx.fillText(line, x, y);
+}
+
+function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+}

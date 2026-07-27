@@ -1,4 +1,5 @@
 export type PromptMode = "random" | "custom";
+export type PromptPack = "classic" | "animals" | "objects" | "hard" | "silly";
 export type RoomPhase = "lobby" | "prompt-entry" | "word-reveal" | "countdown" | "playing" | "review";
 export type PageType = "prompt" | "drawing" | "guess";
 
@@ -12,6 +13,7 @@ export interface GameSettings {
   guessTimerSeconds: number;
   multicolor: boolean;
   promptMode: PromptMode;
+  promptPack: PromptPack;
   hostPlaying: boolean;
   randomPassing: boolean;
 }
