@@ -6,5 +6,10 @@ const serverUrl = import.meta.env.VITE_SERVER_URL ?? (window.location.port === "
 
 export const socket = io(serverUrl, {
   autoConnect: true,
-  transports: ["websocket", "polling"]
+  transports: ["websocket", "polling"],
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 500,
+  reconnectionDelayMax: 5000,
+  timeout: 20000
 });

@@ -47,7 +47,9 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: corsOrigin },
-  maxHttpBufferSize: 2e6
+  maxHttpBufferSize: 2e6,
+  pingInterval: 20_000,
+  pingTimeout: 25_000
 });
 
 const identityBySocket = new Map<string, { roomCode: string; playerName: string }>();
@@ -122,6 +124,24 @@ io.on("connection", (socket) => {
       ack({ ok: true, room: toPublicRoom(result.room, result.player.name), playerName: result.player.name });
       broadcastRoom(result.room);
     } catch (error) { ack({ ok: false, error: error instanceof Error ? error.message : "Unable to join room." }); }
+  });
+
+  socket.on("room:sync", (_payload, ack) => {
+    try {
+      const identity = identityBySocket.get(socket.id);
+      const room = identity ? getRoom(identity.roomCode) : undefined;
+      if (!room || !identity) throw new Error("Room session not found.");
+      ack({ ok: true, room: toPublicRoom(room, identity.playerName), playerName: identity.playerName });
+    } catch (error) { ack({ ok: false, error: error instanceof Error ? error.message : "Unable to sync room." }); }
+  });
+
+  socket.on("room:heartbeat", (_payload, ack) => {
+    try {
+      const identity = identityBySocket.get(socket.id);
+      const room = identity ? getRoom(identity.roomCode) : undefined;
+      if (!room || !identity) throw new Error("Room session not found.");
+      ack({ ok: true, phase: room.phase, playerName: identity.playerName });
+    } catch (error) { ack({ ok: false, error: error instanceof Error ? error.message : "Heartbeat failed." }); }
   });
 
   socket.on("room:reorder", (payload, ack) => {

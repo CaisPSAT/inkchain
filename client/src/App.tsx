@@ -19,6 +19,7 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const roomRef = useRef<Room | null>(null);
   const droppedConnection = useRef(false);
+  const reconnectingRef = useRef(false);
 
   useEffect(() => { roomRef.current = room; }, [room]);
 
@@ -27,40 +28,90 @@ export default function App() {
     localStorage.setItem("inkchain:theme", theme);
   }, [theme]);
 
+  const syncSavedRoom = () => {
+    if (reconnectingRef.current) return;
+    const savedRoomCode = params.get("room")?.toUpperCase() ?? localStorage.getItem("inkchain:room-code") ?? "";
+    const savedName = localStorage.getItem("inkchain:active-name") ?? localStorage.getItem("inkchain:name") ?? "";
+    if (!savedRoomCode || !savedName) return;
+    if (!socket.connected) {
+      setReconnecting(true);
+      socket.connect();
+      return;
+    }
+    reconnectingRef.current = true;
+    socket.emit("room:sync", {}, (sync: Ack<{ room: Room; playerName: string }>) => {
+      if (sync.ok) {
+        saveIdentity(sync.playerName, sync.room.code);
+        setCode(sync.room.code);
+        setRoom(sync.room);
+        setReconnecting(false);
+        reconnectingRef.current = false;
+        return;
+      }
+      socket.emit("room:join", { code: savedRoomCode, name: savedName }, (join: Ack<{ room: Room; playerName: string }>) => {
+        if (join.ok) {
+          saveIdentity(join.playerName, join.room.code);
+          setCode(join.room.code);
+          setRoom(join.room);
+          setReconnecting(false);
+        } else {
+          setReconnecting(true);
+        }
+        reconnectingRef.current = false;
+      });
+    });
+  };
+
   useEffect(() => {
     const onUpdate = (updated: Room) => setRoom(updated);
     const onDisconnect = () => { droppedConnection.current = true; setReconnecting(true); };
     const onConnect = () => {
-      setReconnecting(false);
       if (!droppedConnection.current) return;
       droppedConnection.current = false;
-      const savedRoomCode = params.get("room")?.toUpperCase() ?? localStorage.getItem("inkchain:room-code") ?? "";
-      const savedName = localStorage.getItem("inkchain:active-name") ?? localStorage.getItem("inkchain:name") ?? "";
-      if (!savedRoomCode || !savedName) return;
-      socket.emit("room:join", { code: savedRoomCode, name: savedName }, (response: Ack<{ room: Room; playerName: string }>) => {
-        if (!response.ok) return;
-        saveIdentity(response.playerName, response.room.code);
-        setCode(response.room.code);
-        setRoom(response.room);
-      });
+      syncSavedRoom();
     };
+    const onConnectionIssue = () => setReconnecting(true);
     socket.on("room:updated", onUpdate);
     socket.on("disconnect", onDisconnect);
     socket.on("connect", onConnect);
+    socket.io.on("reconnect_attempt", onConnectionIssue);
+    socket.io.on("reconnect_error", onConnectionIssue);
     const timer = window.setInterval(() => setNow(Date.now()), 100);
-    return () => { socket.off("room:updated", onUpdate); socket.off("disconnect", onDisconnect); socket.off("connect", onConnect); window.clearInterval(timer); };
+    return () => {
+      socket.off("room:updated", onUpdate);
+      socket.off("disconnect", onDisconnect);
+      socket.off("connect", onConnect);
+      socket.io.off("reconnect_attempt", onConnectionIssue);
+      socket.io.off("reconnect_error", onConnectionIssue);
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
-    const savedRoomCode = params.get("room")?.toUpperCase() ?? localStorage.getItem("inkchain:room-code") ?? "";
-    const savedName = localStorage.getItem("inkchain:active-name") ?? localStorage.getItem("inkchain:name") ?? "";
-    if (!savedRoomCode || !savedName || roomRef.current) return;
-    socket.emit("room:join", { code: savedRoomCode, name: savedName }, (response: Ack<{ room: Room; playerName: string }>) => {
-      if (!response.ok) return;
-      saveIdentity(response.playerName, response.room.code);
-      setCode(response.room.code);
-      setRoom(response.room);
-    });
+    if (!roomRef.current) syncSavedRoom();
+  }, []);
+
+  useEffect(() => {
+    const heartbeat = window.setInterval(() => {
+      if (!roomRef.current) return;
+      if (!socket.connected) {
+        setReconnecting(true);
+        socket.connect();
+        return;
+      }
+      socket.emit("room:heartbeat", {}, (response: Ack) => {
+        if (!response.ok) syncSavedRoom();
+      });
+    }, 25_000);
+    const onFocus = () => syncSavedRoom();
+    const onVisibility = () => { if (document.visibilityState === "visible") syncSavedRoom(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(heartbeat);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   const currentPlayer = room?.players.find((p) => p.name === playerName);
@@ -114,7 +165,7 @@ export default function App() {
     <button className="theme-toggle" type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
       {theme === "dark" ? "Light" : "Dark"}
     </button>
-    {reconnecting && <div className="connection-banner">Reconnecting...</div>}
+    {reconnecting && <button className="connection-banner" type="button" onClick={syncSavedRoom}>Reconnecting... tap to retry</button>}
     {screen}
   </>;
 }
