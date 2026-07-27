@@ -1,0 +1,13 @@
+{
+  "name": "inkchain",
+  "private": true,
+  "workspaces": ["client", "server"],
+  "scripts": {
+    "dev": "npm run build -w client && concurrently \"npm run dev -w server\" \"npm run preview -w client -- --host 0.0.0.0 --port 5173 --strictPort\"",
+    "build": "npm run build -w client && npm run build -w server",
+    "start": "npm run start -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
