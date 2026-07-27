@@ -17,6 +17,10 @@ export default function App() {
   const [error, setError] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const roomRef = useRef<Room | null>(null);
+  const droppedConnection = useRef(false);
+
+  useEffect(() => { roomRef.current = room; }, [room]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -25,8 +29,21 @@ export default function App() {
 
   useEffect(() => {
     const onUpdate = (updated: Room) => setRoom(updated);
-    const onDisconnect = () => setReconnecting(true);
-    const onConnect = () => setReconnecting(false);
+    const onDisconnect = () => { droppedConnection.current = true; setReconnecting(true); };
+    const onConnect = () => {
+      setReconnecting(false);
+      if (!droppedConnection.current) return;
+      droppedConnection.current = false;
+      const savedRoomCode = params.get("room")?.toUpperCase() ?? localStorage.getItem("inkchain:room-code") ?? "";
+      const savedName = localStorage.getItem("inkchain:active-name") ?? localStorage.getItem("inkchain:name") ?? "";
+      if (!savedRoomCode || !savedName) return;
+      socket.emit("room:join", { code: savedRoomCode, name: savedName }, (response: Ack<{ room: Room; playerName: string }>) => {
+        if (!response.ok) return;
+        saveIdentity(response.playerName, response.room.code);
+        setCode(response.room.code);
+        setRoom(response.room);
+      });
+    };
     socket.on("room:updated", onUpdate);
     socket.on("disconnect", onDisconnect);
     socket.on("connect", onConnect);
@@ -37,7 +54,7 @@ export default function App() {
   useEffect(() => {
     const savedRoomCode = params.get("room")?.toUpperCase() ?? localStorage.getItem("inkchain:room-code") ?? "";
     const savedName = localStorage.getItem("inkchain:active-name") ?? localStorage.getItem("inkchain:name") ?? "";
-    if (!savedRoomCode || !savedName || room) return;
+    if (!savedRoomCode || !savedName || roomRef.current) return;
     socket.emit("room:join", { code: savedRoomCode, name: savedName }, (response: Ack<{ room: Room; playerName: string }>) => {
       if (!response.ok) return;
       saveIdentity(response.playerName, response.room.code);
@@ -83,10 +100,10 @@ export default function App() {
 
   else if (room.phase === "countdown") {
     const remaining = Math.max(0, Math.ceil(((room.countdownEndsAt ?? now) - now) / 1000));
-    screen = <main className="shell center dark-stage"><div className="countdown" key={remaining}>{remaining > 0 ? remaining : "GO!"}</div></main>;
+    screen = <main className="shell center dark-stage"><div className="room-pill countdown-room">ROOM {room.code}</div><div className="countdown" key={remaining}>{remaining > 0 ? remaining : "GO!"}</div></main>;
   }
 
-  else if (room.phase === "playing") screen = <Play room={room} now={now} hasControl={hasControl} submit={(payload) => emit("turn:submit", payload)} draft={(payload) => socket.emit("turn:draft", payload)} forceAdvance={() => emit("turn:force-advance", {})} />;
+  else if (room.phase === "playing") screen = <Play room={room} playerName={playerName} now={now} hasControl={hasControl} submit={(payload) => emit("turn:submit", payload)} draft={(payload) => socket.emit("turn:draft", payload)} nudgeTimer={() => emit("timer:nudge", {})} forceAdvance={() => emit("turn:force-advance", {})} />;
 
   else screen = <Review room={room} hasControl={hasControl}
     select={(bookletId) => emit("review:select", { bookletId })}
@@ -129,7 +146,10 @@ function Lobby({ room, hasControl, activeCount, playerName, update, reorder, sta
     {hasControl ? <section className="card settings"><p className="eyebrow">GAME SETUP</p>
       <Toggle label="Host is playing" checked={room.settings.hostPlaying} onChange={(v) => update({ hostPlaying: v })}/>
       <Toggle label="Use timer" checked={room.settings.timerEnabled} onChange={(v) => update({ timerEnabled: v })}/>
-      {room.settings.timerEnabled && <label>Time per turn: {room.settings.timerSeconds}s<input type="range" min="30" max="180" step="15" value={room.settings.timerSeconds} onChange={(e) => update({ timerSeconds: Number(e.target.value) })}/></label>}
+      {room.settings.timerEnabled && <>
+        <label>Drawing time: {room.settings.drawTimerSeconds ?? room.settings.timerSeconds}s<input type="range" min="30" max="180" step="15" value={room.settings.drawTimerSeconds ?? room.settings.timerSeconds} onChange={(e) => update({ drawTimerSeconds: Number(e.target.value), timerSeconds: Number(e.target.value) })}/></label>
+        <label>Guessing time: {room.settings.guessTimerSeconds ?? room.settings.timerSeconds}s<input type="range" min="30" max="180" step="15" value={room.settings.guessTimerSeconds ?? room.settings.timerSeconds} onChange={(e) => update({ guessTimerSeconds: Number(e.target.value) })}/></label>
+      </>}
       <Toggle label="Multicolor drawing" checked={room.settings.multicolor} onChange={(v) => update({ multicolor: v })}/>
       <Toggle label="Random passing each turn" checked={room.settings.randomPassing} onChange={(v) => update({ randomPassing: v })}/>
       <label>Prompt source<select value={room.settings.promptMode} onChange={(e) => update({ promptMode: e.target.value as GameSettings["promptMode"] })}><option value="random">Random nouns</option><option value="custom">Players write their own</option></select></label>
@@ -152,32 +172,72 @@ function WordReveal({ room, submit }: { room: Room; submit: () => void }) {
   return <main className="shell center"><section className="card task-card word-card"><p className="eyebrow">SECRET WORD</p><h1>Learn your word</h1><button className={`hold-reveal tap-reveal ${revealed ? "revealed" : ""}`} onClick={() => setRevealed(true)}>{room.task.hiddenWord || "Blank prompt"}</button><p className="subtle">{revealed ? "Keep it secret. Your next screen will show what to draw." : "Tap the card to reveal it."}</p><button className="primary full" disabled={!revealed} onClick={submit}>Continue</button></section></main>;
 }
 
-function Play({ room, now, hasControl, submit, draft, forceAdvance }: { room: Room; now: number; hasControl: boolean; submit: (payload: object) => void; draft: (payload: object) => void; forceAdvance: () => void }) {
+function Play({ room, playerName, now, hasControl, submit, draft, nudgeTimer, forceAdvance }: { room: Room; playerName: string; now: number; hasControl: boolean; submit: (payload: object) => void; draft: (payload: object) => void; nudgeTimer: () => void; forceAdvance: () => void }) {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [guess, setGuess] = useState("");
+  const [nudgeEffect, setNudgeEffect] = useState("");
+  const [nudgeCooling, setNudgeCooling] = useState(false);
   const autoSubmitted = useRef<string | null>(null);
   const taskKey = `${room.round?.turnIndex}-${room.task.bookletId}`;
-  useEffect(() => { setStrokes([]); setGuess(""); autoSubmitted.current = null; }, [taskKey]);
+  const draftKey = `inkchain:draft:${room.code}:${playerName}:${taskKey}`;
+  useEffect(() => {
+    autoSubmitted.current = null;
+    try {
+      const saved = JSON.parse(localStorage.getItem(draftKey) ?? "{}") as { strokes?: Stroke[]; text?: string };
+      setStrokes(room.task.kind === "drawing" ? (room.task.draftStrokes ?? saved.strokes ?? []) : []);
+      setGuess(room.task.kind === "guess" ? (room.task.draftText ?? saved.text ?? "") : "");
+    } catch {
+      setStrokes(room.task.kind === "drawing" ? (room.task.draftStrokes ?? []) : []);
+      setGuess(room.task.kind === "guess" ? (room.task.draftText ?? "") : "");
+    }
+  }, [draftKey, room.task.kind, room.task.draftText, room.task.draftStrokes]);
   const seconds = room.round?.turnEndsAt ? Math.max(0, Math.ceil((room.round.turnEndsAt - now) / 1000)) : null;
+  const turnLimit = room.round?.turnType === "guess"
+    ? (room.settings.guessTimerSeconds ?? room.settings.timerSeconds)
+    : (room.settings.drawTimerSeconds ?? room.settings.timerSeconds);
+  const pendingNames = room.round?.participantNames.filter((name) => !(room.round?.submittedNames ?? []).includes(name)) ?? [];
+  const submittedCount = room.round?.submittedNames.length ?? 0;
+  const canNudgeTimer = Boolean(room.settings.timerEnabled && room.round?.turnType === "drawing" && seconds !== null && submittedCount >= Math.ceil((room.round?.participantNames.length ?? 0) / 2));
+  const pressNudge = () => {
+    if (!canNudgeTimer || nudgeCooling) return;
+    setNudgeCooling(true);
+    nudgeTimer();
+    window.setTimeout(() => setNudgeCooling(false), 2000);
+  };
   useEffect(() => {
-    if (room.task.kind === "drawing") draft({ strokes });
-  }, [room.task.kind, strokes, draft]);
+    const onNudged = (payload: { amount?: number; from?: string; turnIndex?: number }) => {
+      if (payload.turnIndex !== room.round?.turnIndex || room.task.kind !== "drawing") return;
+      setNudgeEffect(`-${payload.amount ?? 1}s`);
+      window.setTimeout(() => setNudgeEffect(""), 850);
+    };
+    socket.on("timer:nudged", onNudged);
+    return () => { socket.off("timer:nudged", onNudged); };
+  }, [room.round?.turnIndex, room.task.kind]);
   useEffect(() => {
-    if (room.task.kind === "guess") draft({ text: guess });
-  }, [room.task.kind, guess, draft]);
+    if (room.task.kind === "drawing") {
+      localStorage.setItem(draftKey, JSON.stringify({ strokes }));
+      draft({ strokes });
+    }
+  }, [room.task.kind, strokes, draftKey]);
+  useEffect(() => {
+    if (room.task.kind === "guess") {
+      localStorage.setItem(draftKey, JSON.stringify({ text: guess }));
+      draft({ text: guess });
+    }
+  }, [room.task.kind, guess, draftKey]);
   useEffect(() => {
     if (!room.round?.turnEndsAt || now < room.round.turnEndsAt || autoSubmitted.current === taskKey) return;
-    if (room.task.kind === "drawing") { autoSubmitted.current = taskKey; submit({ strokes }); }
-    if (room.task.kind === "guess") { autoSubmitted.current = taskKey; submit({ text: guess }); }
+    if (room.task.kind === "drawing") { autoSubmitted.current = taskKey; localStorage.removeItem(draftKey); submit({ strokes }); }
+    if (room.task.kind === "guess") { autoSubmitted.current = taskKey; localStorage.removeItem(draftKey); submit({ text: guess }); }
   }, [now, room.round?.turnEndsAt, room.task.kind, taskKey, strokes, guess, submit]);
   const progress = `${(room.round?.turnIndex ?? 0) + 1} / ${room.round?.totalTurns ?? 0}`;
 
   if (room.task.kind === "spectating") return <StatusCard title="Round in progress" detail="You are hosting without playing. Stop mirroring until review." room={room} timer={seconds} hasControl={hasControl} forceAdvance={forceAdvance}/>;
-  if (room.task.kind === "waiting") return <main className="shell center"><section className="card waiting task-card"><div className="paper-flight">-&gt;</div><p className="eyebrow">TURN {progress}</p><h1>Card passed</h1><p className="subtle">Waiting for {Math.max(0, (room.round?.participantNames.length ?? 0) - (room.round?.submittedNames.length ?? 0))} player(s)...</p>{seconds !== null && <Timer seconds={seconds}/>} {hasControl && <button className="full" onClick={forceAdvance}>Advance turn</button>}</section></main>;
+  if (room.task.kind === "waiting") return <main className="shell center"><section className="card waiting task-card"><div className="paper-flight">-&gt;</div><p className="eyebrow">ROOM {room.code} - TURN {progress}</p><h1>Card passed</h1><p className="subtle">{pendingNames.length ? `Waiting on ${formatNames(pendingNames)}.` : "Everyone is ready."}</p>{seconds !== null && <Timer seconds={seconds} total={turnLimit}/>} {room.round?.turnType === "drawing" && seconds !== null && <button className="full nudge-button" disabled={!canNudgeTimer || nudgeCooling || !pendingNames.length} onClick={pressNudge}>{nudgeCooling ? "Cooling down" : canNudgeTimer ? "Take 1 second off" : "Available at 50% waiting"}</button>} {hasControl && <button className="full" onClick={forceAdvance}>Advance turn</button>}</section></main>;
 
-  if (room.task.kind === "drawing") return <main className="shell play-shell"><header className="play-header"><span>Draw - {progress}</span>{seconds !== null && <Timer seconds={seconds}/>}</header><section className="instruction-card"><p>{room.task.instructionAuthorName ? `Previous by ${room.task.instructionAuthorName}` : "Draw this"}</p><div className="plain-prompt">{room.task.instructionText || "Blank prompt"}</div></section><DrawingCanvas strokes={strokes} onChange={setStrokes} multicolor={room.settings.multicolor}/><button className="primary submit-bar" onClick={() => submit({ strokes })}>Pass card</button></main>;
+  if (room.task.kind === "drawing") return <main className="shell play-shell"><header className="play-header"><div><span className="room-pill">ROOM {room.code}</span><strong>Draw - {progress}</strong></div>{seconds !== null && <Timer seconds={seconds} total={turnLimit}/>}</header><section className="instruction-card"><p>{room.task.instructionAuthorName ? `Previous by ${room.task.instructionAuthorName}` : "Draw this"}</p><div className="plain-prompt">{room.task.instructionText || "Blank prompt"}</div></section><div className="canvas-stage">{nudgeEffect && <div className="nudge-effect">{nudgeEffect}</div>}<DrawingCanvas strokes={strokes} onChange={setStrokes} multicolor={room.settings.multicolor}/></div><button className="primary submit-bar" onClick={() => { localStorage.removeItem(draftKey); submit({ strokes }); }}>Pass card</button></main>;
 
-  return <main className="shell play-shell"><header className="play-header"><span>Guess - {progress}</span>{seconds !== null && <Timer seconds={seconds}/>}</header><section className="card guess-card"><p className="eyebrow">{room.task.previousAuthorName ? `DRAWN BY ${room.task.previousAuthorName.toUpperCase()}` : "WHAT IS THIS?"}</p><DrawingCanvas strokes={room.task.previousDrawing ?? []} readOnly/><textarea value={guess} maxLength={200} placeholder="Type your guess..." onChange={(e) => setGuess(e.target.value)}/><button className="primary full" onClick={() => submit({ text: guess })}>Pass card</button></section></main>;
+  return <main className="shell play-shell"><header className="play-header"><div><span className="room-pill">ROOM {room.code}</span><strong>Guess - {progress}</strong></div>{seconds !== null && <Timer seconds={seconds} total={turnLimit}/>}</header><section className="card guess-card"><p className="eyebrow">{room.task.previousAuthorName ? `DRAWN BY ${room.task.previousAuthorName.toUpperCase()}` : "WHAT IS THIS?"}</p><DrawingCanvas strokes={room.task.previousDrawing ?? []} readOnly/><textarea value={guess} maxLength={200} placeholder="Type your guess..." onChange={(e) => setGuess(e.target.value)}/><button className="primary full" onClick={() => { localStorage.removeItem(draftKey); submit({ text: guess }); }}>Pass card</button></section></main>;
 }
 
 function Review({ room, hasControl, select, next, newRound }: { room: Room; hasControl: boolean; select: (id: string) => void; next: () => void; newRound: () => void }) {
@@ -196,5 +256,9 @@ function Review({ room, hasControl, select, next, newRound }: { room: Room; hasC
 }
 
 function StatusCard({ title, detail, room, timer, hasControl = false, forceAdvance }: { title: string; detail: string; room: Room; timer?: number | null; hasControl?: boolean; forceAdvance?: () => void }) { return <main className="shell center"><section className="card waiting task-card"><div className="pulse"/><p className="eyebrow">ROOM {room.code}</p><h1>{title}</h1><p className="subtle">{detail}</p>{timer !== undefined && timer !== null && <Timer seconds={timer}/>} {hasControl && forceAdvance && <button className="full" onClick={forceAdvance}>Advance turn</button>}</section></main>; }
-function Timer({ seconds }: { seconds: number }) { return <div className={`timer ${seconds <= 10 ? "urgent" : ""}`}>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</div>; }
+function Timer({ seconds, total = 90 }: { seconds: number; total?: number }) {
+  const pct = Math.max(0, Math.min(100, (seconds / total) * 100));
+  return <div className={`timer ${seconds <= 10 ? "urgent" : seconds <= 30 ? "warning" : ""}`}><span>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</span><i style={{ width: `${pct}%` }}/></div>;
+}
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) { return <label className="toggle-row"><span>{label}</span><input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)}/></label>; }
+function formatNames(names: string[]) { return names.length <= 1 ? (names[0] ?? "no one") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`; }

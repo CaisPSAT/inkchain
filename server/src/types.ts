@@ -8,6 +8,8 @@ export interface Stroke { color: string; width: number; points: Point[] }
 export interface GameSettings {
   timerEnabled: boolean;
   timerSeconds: number;
+  drawTimerSeconds: number;
+  guessTimerSeconds: number;
   multicolor: boolean;
   promptMode: PromptMode;
   hostPlaying: boolean;
@@ -55,6 +57,7 @@ export interface RoundState {
   turnEndsAt?: number;
   submissions: Record<string, Submission>;
   drafts: Record<string, { text?: string; strokes?: Stroke[] }>;
+  timerNudgeCooldowns: Record<string, number>;
   wordRevealAcks: Record<string, boolean>;
   reviewedBookletIds: string[];
   reviewBookletId?: string;
@@ -82,6 +85,8 @@ export interface PlayerTask {
   instructionAuthorName?: string;
   previousDrawing?: Stroke[];
   previousAuthorName?: string;
+  draftText?: string;
+  draftStrokes?: Stroke[];
   submitted?: boolean;
 }
 

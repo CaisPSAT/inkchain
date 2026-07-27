@@ -424,19 +424,75 @@ input[type="range"] {
   font-weight: 900;
 }
 
-.timer {
-  font-variant-numeric: tabular-nums;
-  background: var(--text);
-  color: var(--bg);
+.play-header > div {
+  display: grid;
+  gap: 6px;
+}
+
+.room-pill {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 9px 14px;
+  padding: 5px 9px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 0.74rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+}
+
+.countdown-room {
+  position: fixed;
+  top: max(72px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.timer {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  min-width: 92px;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
   font-weight: 900;
+}
+
+.timer span {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+}
+
+.timer i {
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.25s linear, background 0.2s;
+}
+
+.timer.warning i {
+  background: #f59e0b;
 }
 
 .timer.urgent {
   background: #b91c1c;
   color: #ffffff;
   animation: pulseSmall 0.8s infinite;
+}
+
+.timer.urgent i {
+  background: #ffffff;
 }
 
 .instruction-card {
@@ -491,6 +547,28 @@ input[type="range"] {
   width: 100%;
 }
 
+.canvas-stage {
+  position: relative;
+}
+
+.nudge-effect {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  z-index: 4;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  padding: 10px 18px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--accent);
+  box-shadow: 0 14px 34px rgba(29, 78, 216, 0.28);
+  font-size: clamp(1.4rem, 7vw, 3rem);
+  font-weight: 950;
+  pointer-events: none;
+  animation: nudgePop 0.85s ease forwards;
+}
+
 .drawing-canvas {
   display: block;
   width: 100%;
@@ -526,6 +604,16 @@ input[type="range"] {
   position: sticky;
   bottom: max(10px, env(safe-area-inset-bottom));
   width: 100%;
+}
+
+.nudge-button {
+  margin-top: 12px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.nudge-button:not(:disabled) {
+  border-color: var(--accent);
 }
 
 .guess-card {
@@ -668,6 +756,21 @@ input[type="range"] {
   to {
     transform: none;
     opacity: 1;
+  }
+}
+
+@keyframes nudgePop {
+  0% {
+    transform: translate(-50%, -30%) scale(0.82);
+    opacity: 0;
+  }
+  25% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -90%) scale(1.08);
+    opacity: 0;
   }
 }
 

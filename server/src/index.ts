@@ -12,11 +12,11 @@ import {
   beginGame,
   customPromptsComplete,
   disconnectPlayer,
-  fillDisconnectedSubmissions,
   finishTurn,
   getRoom,
   joinRoom,
   createRoom,
+  nudgeTurnTimer,
   reorderPlayers,
   resetToLobby,
   saveTurnDraft,
@@ -87,7 +87,6 @@ function scheduleTurnTimer(room: Room): void {
 }
 
 function advanceIfReady(room: Room): void {
-  fillDisconnectedSubmissions(room);
   if (!allTurnSubmissionsComplete(room)) return;
   finishTurn(room);
   if (room.phase === "playing") scheduleTurnTimer(room);
@@ -227,6 +226,22 @@ io.on("connection", (socket) => {
       broadcastRoom(room);
       ack({ ok: true });
     } catch (error) { ack({ ok: false, error: error instanceof Error ? error.message : "Unable to advance turn." }); }
+  });
+
+  socket.on("timer:nudge", (_payload, ack) => {
+    try {
+      const identity = identityBySocket.get(socket.id);
+      const room = identity ? getRoom(identity.roomCode) : undefined;
+      if (!room || !identity) throw new Error("Room not found.");
+      const result = nudgeTurnTimer(room, identity.playerName);
+      scheduleTurnTimer(room);
+      for (const name of result.remainingNames) {
+        const player = room.players.find((p) => p.name === name && p.connected);
+        if (player) io.to(player.id).emit("timer:nudged", { amount: 1, from: identity.playerName, turnIndex: room.round?.turnIndex });
+      }
+      broadcastRoom(room);
+      ack({ ok: true });
+    } catch (error) { ack({ ok: false, error: error instanceof Error ? error.message : "Unable to nudge timer." }); }
   });
 
   socket.on("review:select", (payload, ack) => {

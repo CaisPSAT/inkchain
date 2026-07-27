@@ -11,8 +11,9 @@ A complete browser-based drawing-and-guessing party game foundation for 4–16 p
 - Host and automatic backup co-host
 - Host may play or spectate
 - Random nouns or player-written prompts
-- 30–180 second optional timer
+- Separate 30-180 second optional draw and guess timers
 - Auto-submit of in-progress work when time expires
+- Waiting players can shave one second off drawing time once at least half the room has submitted
 - Black-only or multicolor drawing
 - Variable pen thickness and undo
 - Ordered passing or randomized passing each turn

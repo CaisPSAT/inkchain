@@ -9,6 +9,8 @@ const EMPTY_ROOM_TTL_MS = 15 * 60 * 1000;
 const defaultSettings: GameSettings = {
   timerEnabled: true,
   timerSeconds: 90,
+  drawTimerSeconds: 90,
+  guessTimerSeconds: 60,
   multicolor: true,
   promptMode: "random",
   hostPlaying: false,
@@ -86,6 +88,7 @@ function initializeRound(room: Room): void {
     turnType: "drawing",
     submissions: {},
     drafts: {},
+    timerNudgeCooldowns: {},
     wordRevealAcks: {},
     reviewedBookletIds: [],
     reviewPageIndex: 0
@@ -172,7 +175,14 @@ export function updateSettings(code: string, settings: Partial<GameSettings>): R
   const room = getRoom(code);
   if (!room) throw new Error("Room not found.");
   if (room.phase !== "lobby") throw new Error("Settings cannot change during a round.");
-  room.settings = { ...room.settings, ...settings, timerSeconds: Math.min(180, Math.max(30, settings.timerSeconds ?? room.settings.timerSeconds)) };
+  const nextTimerSeconds = Math.min(180, Math.max(30, settings.timerSeconds ?? room.settings.timerSeconds));
+  room.settings = {
+    ...room.settings,
+    ...settings,
+    timerSeconds: nextTimerSeconds,
+    drawTimerSeconds: Math.min(180, Math.max(30, settings.drawTimerSeconds ?? settings.timerSeconds ?? room.settings.drawTimerSeconds ?? nextTimerSeconds)),
+    guessTimerSeconds: Math.min(180, Math.max(30, settings.guessTimerSeconds ?? room.settings.guessTimerSeconds ?? nextTimerSeconds))
+  };
   return room;
 }
 
@@ -219,8 +229,12 @@ export function startTurn(room: Room): void {
   room.phase = "playing";
   room.round.submissions = {};
   room.round.drafts = {};
+  room.round.timerNudgeCooldowns = {};
   room.round.turnType = room.round.turnIndex % 2 === 0 ? "drawing" : "guess";
-  room.round.turnEndsAt = room.settings.timerEnabled ? Date.now() + room.settings.timerSeconds * 1000 : undefined;
+  const limit = room.round.turnType === "drawing"
+    ? (room.settings.drawTimerSeconds ?? room.settings.timerSeconds)
+    : (room.settings.guessTimerSeconds ?? room.settings.timerSeconds);
+  room.round.turnEndsAt = room.settings.timerEnabled ? Date.now() + limit * 1000 : undefined;
 }
 
 function assignedBooklet(room: Room, playerName: string): Booklet | undefined {
@@ -268,6 +282,22 @@ export function submitDraftOrBlank(room: Room, playerName: string): void {
   } else {
     submitTurn(room, playerName, { blank: true });
   }
+}
+
+export function nudgeTurnTimer(room: Room, playerName: string): { remainingNames: string[] } {
+  const round = room.round;
+  if (room.phase !== "playing" || !round || !room.settings.timerEnabled || !round.turnEndsAt) throw new Error("Timer is not active.");
+  if (round.turnType !== "drawing") throw new Error("Timer nudges are only available while players are drawing.");
+  if (!round.participantNames.includes(playerName)) throw new Error("You are not participating in this turn.");
+  if (!round.submissions[playerName]) throw new Error("Submit your drawing before nudging the timer.");
+  const submittedCount = Object.keys(round.submissions).length;
+  if (submittedCount < Math.ceil(round.participantNames.length / 2)) throw new Error("At least half of players must be waiting first.");
+  const now = Date.now();
+  const lastNudge = round.timerNudgeCooldowns[playerName] ?? 0;
+  if (now - lastNudge < 2000) throw new Error("Nudge is cooling down.");
+  round.timerNudgeCooldowns[playerName] = now;
+  round.turnEndsAt = Math.max(now, round.turnEndsAt - 1000);
+  return { remainingNames: round.participantNames.filter((name) => !round.submissions[name]) };
 }
 
 export function fillDisconnectedSubmissions(room: Room): void {
@@ -349,9 +379,10 @@ export function toPublicRoom(room: Room, playerName: string): PublicRoom {
     else if (submitted) task = { kind: "waiting", submitted: true };
     else {
       const previous = booklet.pages.at(-1);
+      const draft = round.drafts[playerName];
       task = round.turnType === "drawing"
-        ? { kind: "drawing", bookletId: booklet.id, instructionText: previous?.text ?? "", instructionAuthorName: previous?.authorName, submitted: false }
-        : { kind: "guess", bookletId: booklet.id, previousDrawing: previous?.strokes ?? [], previousAuthorName: previous?.authorName, submitted: false };
+        ? { kind: "drawing", bookletId: booklet.id, instructionText: previous?.text ?? "", instructionAuthorName: previous?.authorName, draftStrokes: draft?.strokes, submitted: false }
+        : { kind: "guess", bookletId: booklet.id, previousDrawing: previous?.strokes ?? [], previousAuthorName: previous?.authorName, draftText: draft?.text, submitted: false };
     }
   }
 
